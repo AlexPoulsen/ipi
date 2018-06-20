@@ -2,6 +2,7 @@
 >------------------------------------------------------------------------------------------<
 > Designed for pixel art
 > File is encoded as a palette number and index
+> All data is big-endian encoded
 > there are a few encodings
 >     |
 >     | 8 bit:  | PP-PP-PP-II         | palettes:   64 indices:   4 | mode nibble: 0001
@@ -25,24 +26,24 @@
 >     -----------------------------------------
 >     | version byte
 >     --- LYT --- per layer (16 total) --------
->     | index nibble
->     | tile mode nibble (normal is 0000, tiled is 1111)
->     | zeros nibble
->     | color mode nibble
+>     | layer in use byte (all 0s or all 1s to enable or disable respectively)
+>     | index byte  (end nibble is used)
+>     | tile mode byte (normal is all zeros, tiled is all ones)
+>     | color mode byte (end nibble is used)
 >     | opacity byte
 >     | vertical position byte, later layers are put on top of earlier layers in the event of a shared position
->     | if normal mode: layer height, represented in 3 nibbles, for a maximum of 4096 pixels on edge
->     | if normal mode: layer width, represented in 3 nibbles, for a maximum of 4096 pixels on edge
->     | if tiled mode: tile height byte
->     | if tiled mode: tile width byte
+>     | if normal mode: layer height, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
+>     | if normal mode: layer width, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
+>     | if tiled mode: tile height byte, with a maximum of 256 pixels on edge
+>     | if tiled mode: tile width byte, with a maximum of 256 pixels on edge
 >     | if tiled mode: tiles are stored left-to-right top-to-bottom for each tile and left-to-right top-to-bottom for each pixel with 256 tiles on each edge
 >     | start position of that layer's image data "IMD", represented in 8 bytes, 8 byte pointer allows for a maximum file size of approx 4.25 gigabytes
 >     | PLT
 >     | name of layer
->     | 4 bytes of 0101-0101
+>     | twice of 00000001 10010111, 00000000 11100111 11010000 00000000 (01 97 00 e7 d0 00 - 0 LYT 00 END 000)
 > CLI Flags
->     | -m -8b  -8     8bit mode, allocates 12,288 bytes for palettes
->     | -M -16b -16    16bit mode, allocates 3,145,728 bytes for palettes
+>     | -m -8b  -8     8bit mode, allocates 1,536 bytes for palettes
+>     | -M -16b -16    16bit mode, allocates 393,216 bytes for palettes
 >     | -h -H   -help  prints help text
 >     | -L             prealloc maximum image dimensions possible 4096x4096, original is top left if supplied, this will take up over 0.25 gigabytes in 16bit mode
 >     | -u -U  -up     upgrades 8bit ipi to 16bit, refactors image (or layers), takes input on what mode to switch to
