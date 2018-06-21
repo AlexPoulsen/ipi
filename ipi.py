@@ -85,6 +85,16 @@ class HeaderByteError(Exception):
 		return "HeaderByteError: " + self.message
 
 
+class UnfinishedCodeError(Exception):
+	__slots__ = ["message"]
+
+	def __init__(self, message):
+		self.message = message
+
+	def __repr__(self):
+		return "UnfinishedCodeError: " + self.message
+
+
 def inis(x, y):
 	try:
 		return x in y
@@ -379,6 +389,7 @@ class IPI:
 					input_file.seek(0)
 
 		else:
+			"""a
 			with open(filename, mode='rb') as input_file:
 				for i, file in enumerate(self.LYT):
 
@@ -433,6 +444,8 @@ class IPI:
 						self.IMD[i]["img"] = img_array
 
 					input_file.seek(0)
+			# """
+			raise UnfinishedCodeError("compressed files not supported")
 
 
 if len(sys.argv) > 1:
