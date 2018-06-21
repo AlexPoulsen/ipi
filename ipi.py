@@ -27,7 +27,7 @@
 >     -----------------------------------------
 >     | version byte
 >     --- LYT --- per layer (16 total) --------
->     | layer in use byte (all 0s or all 1s to enable or disable respectively)
+>     | layer in use byte (all 0s or all 1s to enable or disable respectively, if disabled, layer must have no following bytes)
 >     | index byte  (end nibble is used)
 >     | tile mode byte (normal is all zeros, tiled is all ones)
 >     | color mode byte (end nibble is used)
@@ -236,7 +236,7 @@ class IPI:
 				"width":        0,
 				"tile_mode":    "",
 				"tiles":        [],
-				"img":          np.ndarray
+				"img":          np.zeros((1, 1, 1), dtype=np.int32)
 			}
 		] * 16
 		self.colormode_dict = {1: [6, 2], 2: [5, 3], 3: [4, 4], 4: [3, 5], 8: [13, 3], 9: [12, 4], 10: [11, 5], 11: [10, 6], 12: [9, 7], 13: [8, 8]}
@@ -250,17 +250,20 @@ class IPI:
 				raise FileTypeError("not an ipi file or header is damaged")
 			version = input_file.read(1)
 			print(version)
-			if version in [zeros]:
-				self.decode_v1(filename)
+			if version in [b'\x00', b'\x01', b'\x80', b'\x81']:
+				if version >= b"\x80":
+					self.decode_v1(filename, True)
+				else:
+					self.decode_v1(filename, False)
 
-	def decode_v1(self, filename):
+	def decode_v1(self, filename, compressed=False):
 		with open(filename, mode='rb') as input_file:
 			_ = input_file.read(5)
 			enabled_written = []
 
 			for n in range(16):
-				layer_in_use = filename.read(1)
-				index = int(filename.read(1)[4:], 2)
+				layer_in_use = input_file.read(1)
+				index = int(input_file.read(1)[4:], 2)
 
 				if index in enabled_written:  # this avoids overwriting layers
 					continue
@@ -274,10 +277,8 @@ class IPI:
 				else:
 					raise HeaderByteError("enable byte toggle is not a valid option, header may be damaged")
 
-				tilemode = filename.read(1)
-				colormode = int(filename.read(1)[4:], 2)
-				self.LYT[index]["opacity"] = int(filename.read(1), 2) % 16
-				self.LYT[index]["vertical_pos"] = int(filename.read(1), 2) % 256
+				tilemode = input_file.read(1)
+				colormode = int(input_file.read(1)[4:], 2)
 
 				if tilemode == zeros:
 					self.LYT[index]["tile_mode"] = "normal"
@@ -295,49 +296,68 @@ class IPI:
 					raise HeaderByteError("colormode byte is not a valid option, header may be damaged")
 				self.LYT[index]["color_mode"] = colormode
 
+				self.LYT[index]["opacity"] = int(input_file.read(1), 2) % 16
+				self.LYT[index]["vertical_pos"] = int(input_file.read(1), 2) % 256
+
 				if tilemode == "normal":
-					self.LYT[index]["height"] = int(filename.read(2), 2) % 4096
-					self.LYT[index]["width"] = int(filename.read(2), 2) % 4096
-					self.IMD[index]["height"] = int(filename.read(2), 2) % 4096
-					self.IMD[index]["width"] = int(filename.read(2), 2) % 4096
+					self.IMD[index]["height"] = self.LYT[index]["height"] = int(input_file.read(2), 2) % 4096
+					self.IMD[index]["width"] = self.LYT[index]["width"] = int(input_file.read(2), 2) % 4096
 				elif tilemode == "tiles":
-					self.LYT[index]["height"] = int(filename.read(1), 2)
-					self.LYT[index]["width"] = int(filename.read(1), 2)
-					self.IMD[index]["height"] = int(filename.read(1), 2)
-					self.IMD[index]["width"] = int(filename.read(1), 2)
+					self.IMD[index]["height"] = self.LYT[index]["height"] = int(input_file.read(1), 2)
+					self.IMD[index]["width"] = self.LYT[index]["width"] = int(input_file.read(1), 2)
 
 				pal_num = self.colormode_dict[colormode][0]
 				clr_num = self.colormode_dict[colormode][1]
-				imd_pos = list(filename.read(8))
+				imd_pos = list(input_file.read(8))
 
 				self.LYT[index]["IMD_pos"] = sum([n * m for n, m in zip(imd_pos, [2 ** (n * 8) for n in range(len(imd_pos))][::-1])])
 				self.LYT[index]["PLT"] = []
 				for n in range(pal_num):
-					self.LYT[index]["PLT"][n] = [bytecolor_to_rgb(filename.read(6)) for _ in range(clr_num)]
+					self.LYT[index]["PLT"][n] = [bytecolor_to_rgb(input_file.read(6)) for _ in range(clr_num)]
 
 				textbyte = b""
 				textstr = b""
 				while textbyte != b"00000001 10010111, 00000000 11100111 11010000 00000000" * 2:  # (01 97 00 e7 d0 00 - 0 LYT 00 END 000)
-					textbyte = filename.read(2)
+					textbyte = input_file.read(2)
 					if textbyte != b"00000001 10010111, 00000000 11100111 11010000 00000000" * 2:
 						textstr = textstr + textbyte
 
-		with open(filename, mode='rb') as input_file:
-			for i, file in enumerate(self.LYT):
+		if not compressed:
+			with open(filename, mode='rb') as input_file:
+				for i, file in enumerate(self.LYT):
 
-				if not self.LYT[i]["enable"]:
-					continue
+					if not self.LYT[i]["enable"]:
+						continue
 
-				pos = self.LYT[i]["IMD_pos"]
-				cmode = self.LYT[i]["color_mode"]
-				tmode = self.LYT[i]["tile_mode"]
-				width = self.LYT[i]["width"]
-				height = self.LYT[i]["height"]
+					pos = self.LYT[i]["IMD_pos"]
+					cmode = self.LYT[i]["color_mode"]
+					tmode = self.LYT[i]["tile_mode"]
+					width = self.LYT[i]["width"]
+					height = self.LYT[i]["height"]
 
-				input_file.seek(pos)
+					input_file.seek(pos)
 
-				if tmode == "tiles":
-					for z in range(256 * 256):
+					if tmode == "tiles":
+						for z in range(256 * 256):
+							img_array = np.zeros((height, width, 2), dtype=np.int32)
+
+							for y in range(height):
+								for x in range(width):
+
+									if cmode >= 8:
+										clr_raw = input_file.read(2)
+									else:
+										clr_raw = input_file.read(1)
+
+									pal_n = self.colormode_dict[cmode][0]
+									pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
+									clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
+									img_array[y][x][0] = pal_data
+									img_array[y][x][1] = clr_data
+
+							self.IMD[i]["tiles"][z] = img_array
+
+					elif tmode == "normal":
 						img_array = np.zeros((height, width, 2), dtype=np.int32)
 
 						for y in range(height):
@@ -354,26 +374,65 @@ class IPI:
 								img_array[y][x][0] = pal_data
 								img_array[y][x][1] = clr_data
 
-						self.IMD[i]["tiles"][z] = img_array
+						self.IMD[i]["img"] = img_array
 
-				elif tmode == "normal":
-					img_array = np.zeros((height, width, 2), dtype=np.int32)
+					input_file.seek(0)
 
-					for y in range(height):
-						for x in range(width):
+		else:
+			with open(filename, mode='rb') as input_file:
+				for i, file in enumerate(self.LYT):
 
-							if cmode >= 8:
-								clr_raw = input_file.read(2)
-							else:
-								clr_raw = input_file.read(1)
+					if not self.LYT[i]["enable"]:
+						continue
 
-							pal_n = self.colormode_dict[cmode][0]
-							pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
-							clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
-							img_array[y][x][0] = pal_data
-							img_array[y][x][1] = clr_data
+					pos = self.LYT[i]["IMD_pos"]
+					cmode = self.LYT[i]["color_mode"]
+					tmode = self.LYT[i]["tile_mode"]
+					width = self.LYT[i]["width"]
+					height = self.LYT[i]["height"]
 
-					self.IMD[i]["img"] = img_array
+					input_file.seek(pos)
+
+					if tmode == "tiles":
+						for z in range(256 * 256):
+							img_array = np.zeros((height, width, 2), dtype=np.int32)
+
+							for y in range(height):
+								for x in range(width):
+
+									if cmode >= 8:
+										clr_raw = input_file.read(2)
+									else:
+										clr_raw = input_file.read(1)
+
+									pal_n = self.colormode_dict[cmode][0]
+									pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
+									clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
+									img_array[y][x][0] = pal_data
+									img_array[y][x][1] = clr_data
+
+							self.IMD[i]["tiles"][z] = img_array
+
+					elif tmode == "normal":
+						img_array = np.zeros((height, width, 2), dtype=np.int32)
+
+						for y in range(height):
+							for x in range(width):
+
+								if cmode >= 8:
+									clr_raw = input_file.read(2)
+								else:
+									clr_raw = input_file.read(1)
+
+								pal_n = self.colormode_dict[cmode][0]
+								pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
+								clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
+								img_array[y][x][0] = pal_data
+								img_array[y][x][1] = clr_data
+
+						self.IMD[i]["img"] = img_array
+
+					input_file.seek(0)
 
 
 if len(sys.argv) > 1:
