@@ -280,6 +280,7 @@ class IPI:
 				if layer_in_use == zeros:
 					self.LYT[index]["enable"] = 0
 					self.IMD[index]["enable"] = 0
+					continue
 				elif (layer_in_use == ones) or (layer_in_use == one):
 					self.LYT[index]["enable"] = 1
 					self.IMD[index]["enable"] = 1
@@ -446,6 +447,9 @@ class IPI:
 					input_file.seek(0)
 			# """
 			raise UnfinishedCodeError("compressed files not supported")
+
+	def write(self, filename):
+		pass
 
 
 if len(sys.argv) > 1:

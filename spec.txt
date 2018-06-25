@@ -26,7 +26,7 @@
 >     -----------------------------------------
 >     | version byte
 >     --- LYT --- per layer (16 total) --------
->     | layer in use byte (all 0s or all 1s to enable or disable respectively)
+>     | layer in use byte (all 0s or all 1s to enable or disable respectively, if disabled, layer must have no following bytes)
 >     | index byte  (end nibble is used)
 >     | tile mode byte (normal is all zeros, tiled is all ones)
 >     | color mode byte (end nibble is used)
