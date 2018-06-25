@@ -32,12 +32,13 @@
 >     | color mode byte (end nibble is used)
 >     | opacity byte
 >     | vertical position byte, later layers are put on top of earlier layers in the event of a shared position
->     | if normal mode: layer height, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
->     | if normal mode: layer width, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
+>     | if normal mode: layer height, represented in two bytes
+>     | if normal mode: layer width, represented in two bytes
 >     | if tiled mode: tile height byte, with a maximum of 256 pixels on edge
 >     | if tiled mode: tile width byte, with a maximum of 256 pixels on edge
 >     | if tiled mode: tiles are stored left-to-right top-to-bottom for each tile and left-to-right top-to-bottom for each pixel with 256 tiles on each edge
 >     | start position of that layer's image data "IMD", represented in 8 bytes, 8 byte pointer allows for a maximum file size of approx 4.25 gigabytes
+>     | size of IMD, used in compressed data. ignored otherwise, 8 bytes
 >     | PLT
 >     | name of layer
 >     | twice of 00000001 10010111, 00000000 11100111 11010000 00000000 (01 97 00 e7 d0 00 - 0 LYT 00 END 000)

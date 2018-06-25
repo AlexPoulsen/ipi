@@ -33,12 +33,13 @@
 >     | color mode byte (end nibble is used)
 >     | opacity byte
 >     | vertical position byte, later layers are put on top of earlier layers in the event of a shared position
->     | if normal mode: layer height, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
->     | if normal mode: layer width, represented in two bytes with the leftmost nibble ignored, for a maximum of 4096 pixels on edge
+>     | if normal mode: layer height, represented in two bytes
+>     | if normal mode: layer width, represented in two bytes
 >     | if tiled mode: tile height byte, with a maximum of 256 pixels on edge
 >     | if tiled mode: tile width byte, with a maximum of 256 pixels on edge
 >     | if tiled mode: tiles are stored left-to-right top-to-bottom for each tile and left-to-right top-to-bottom for each pixel with 256 tiles on each edge
 >     | start position of that layer's image data "IMD", represented in 8 bytes, 8 byte pointer allows for a maximum file size of approx 4.25 gigabytes
+>     | size of IMD, used in compressed data. ignored otherwise, 8 bytes
 >     | PLT
 >     | name of layer
 >     | twice of 00000001 10010111, 00000000 11100111 11010000 00000000 (01 97 00 e7 d0 00 - 0 LYT 00 END 000)
@@ -63,6 +64,11 @@ import typing
 import bitstring
 import codecs
 import math
+import ReadBytes
+import lzma
+
+
+byte_filelike = ReadBytes.ReadBytes
 
 
 class FileTypeError(Exception):
@@ -227,26 +233,28 @@ class IPI:
 	def __init__(self, filename: typing.Optional[str] = None):
 		self.LYT = [
 			{
-				"enable":       0,
-				"tile_mode":    "",
-				"color_mode":   "",
-				"opacity":      0,
-				"vertical_pos": 0,
-				"height":       0,
-				"width":        0,
-				"IMD_pos":      0,
-				"PLT":          [],
-				"name&info":    ""
+				"enable":        0,
+				"tile_mode":     "",
+				"color_mode":    "",
+				"opacity":       0,
+				"vertical_pos":  0,
+				"height":        0,
+				"width":         0,
+				"IMD_pos":       0,
+				"PLT":           [],
+				"name&info":     "",
+				"IMD_data_size": 0,
+				"compressed":    False
 			}
 		] * 16
 		self.IMD = [
 			{
-				"enable":       0,
-				"height":       0,
-				"width":        0,
-				"tile_mode":    "",
-				"tiles":        [],
-				"img":          np.zeros((1, 1, 1), dtype=np.int32)
+				"enable":        0,
+				"height":        0,
+				"width":         0,
+				"tile_mode":     "",
+				"tiles":         [],
+				"img":           np.zeros((1, 1, 1), dtype=np.int32)
 			}
 		] * 16
 		self.colormode_dict = {1: [6, 2], 2: [5, 3], 3: [4, 4], 4: [3, 5], 8: [13, 3], 9: [12, 4], 10: [11, 5], 11: [10, 6], 12: [9, 7], 13: [8, 8]}
@@ -267,11 +275,13 @@ class IPI:
 					self.decode_v1(filename, False)
 
 	def decode_v1(self, filename, compressed=False):
+		# byte_offset = 0
 		with open(filename, mode='rb') as input_file:
 			_ = input_file.read(5)
 			enabled_written = []
 
 			for n in range(16):
+				# input_file.seek(byte_offset)
 				layer_in_use = input_file.read(1)
 				index = int(input_file.read(1)[4:], 2)
 
@@ -311,17 +321,20 @@ class IPI:
 				self.LYT[index]["vertical_pos"] = int(input_file.read(1), 2) % 256
 
 				if tilemode == "normal":
-					self.IMD[index]["height"] = self.LYT[index]["height"] = int(input_file.read(2), 2) % 4096
-					self.IMD[index]["width"] = self.LYT[index]["width"] = int(input_file.read(2), 2) % 4096
+					self.IMD[index]["height"] = self.LYT[index]["height"] = int(input_file.read(2), 2)
+					self.IMD[index]["width"] = self.LYT[index]["width"] = int(input_file.read(2), 2)
+					byte_suboffset = 2
 				elif tilemode == "tiles":
 					self.IMD[index]["height"] = self.LYT[index]["height"] = int(input_file.read(1), 2)
 					self.IMD[index]["width"] = self.LYT[index]["width"] = int(input_file.read(1), 2)
+					byte_suboffset = 1
 
 				pal_num = self.colormode_dict[colormode][0]
 				clr_num = self.colormode_dict[colormode][1]
 				imd_pos = list(input_file.read(8))
 
 				self.LYT[index]["IMD_pos"] = sum([n * m for n, m in zip(imd_pos, [2 ** (n * 8) for n in range(len(imd_pos))][::-1])])
+				self.LYT[index]["IMD_data_size"] = sum([n * m for n, m in zip(imd_pos, [2 ** (n * 8) for n in range(len(imd_pos))][::-1])])
 				self.LYT[index]["PLT"] = []
 				for n in range(pal_num):
 					self.LYT[index]["PLT"][n] = [bytecolor_to_rgb(input_file.read(6)) for _ in range(clr_num)]
@@ -332,52 +345,50 @@ class IPI:
 					textbyte = input_file.read(2)
 					if textbyte != b"00000001 10010111, 00000000 11100111 11010000 00000000" * 2:
 						textstr = textstr + textbyte
+				# byte_offset += 14 + byte_suboffset + (pal_num * clr_num)
 
-		if not compressed:
-			with open(filename, mode='rb') as input_file:
-				for i, file in enumerate(self.LYT):
+		self.IMD[index]["compressed"] = compressed
+		with open(filename, mode='rb') as input_file:
+			for i, file in enumerate(self.LYT):
 
-					if not self.LYT[i]["enable"]:
-						continue
+				if not self.LYT[i]["enable"]:
+					continue
 
-					pos = self.LYT[i]["IMD_pos"]
-					cmode = self.LYT[i]["color_mode"]
-					tmode = self.LYT[i]["tile_mode"]
-					width = self.LYT[i]["width"]
-					height = self.LYT[i]["height"]
+				pos = self.LYT[i]["IMD_pos"]
+				input_file.seek(pos)
+				cmode = self.LYT[i]["color_mode"]
+				tmode = self.LYT[i]["tile_mode"]
+				width = self.LYT[i]["width"]
+				height = self.LYT[i]["height"]
+				pal_n = self.colormode_dict[cmode][0]
+				pal_mul = 1 if pal_n < 7 else 2
 
-					input_file.seek(pos)
-
+				if not compressed:
 					if tmode == "tiles":
-						for z in range(256 * 256):
-							img_array = np.zeros((height, width, 2), dtype=np.int32)
-
-							for y in range(height):
-								for x in range(width):
-
-									if cmode >= 8:
-										clr_raw = input_file.read(2)
-									else:
-										clr_raw = input_file.read(1)
-
-									pal_n = self.colormode_dict[cmode][0]
-									pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
-									clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
-									img_array[y][x][0] = pal_data
-									img_array[y][x][1] = clr_data
-
-							self.IMD[i]["tiles"][z] = img_array
-
+						size = 256 * 256 * width * height
 					elif tmode == "normal":
+						size = width * height
+					else:
+						raise ValueError("Invalid Tilemode string")
+					size *= pal_mul
+				else:
+					size = self.IMD[index]["IMD_data_size"]
+
+				image_bytes = byte_filelike(input_file.read(size))
+				if compressed:
+					image_bytes = lzma.decompress(image_bytes)
+
+				if tmode == "tiles":
+					for z in range(256 * 256):
 						img_array = np.zeros((height, width, 2), dtype=np.int32)
 
 						for y in range(height):
 							for x in range(width):
 
 								if cmode >= 8:
-									clr_raw = input_file.read(2)
+									clr_raw = image_bytes.read(2)
 								else:
-									clr_raw = input_file.read(1)
+									clr_raw = image_bytes.read(1)
 
 								pal_n = self.colormode_dict[cmode][0]
 								pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
@@ -385,68 +396,28 @@ class IPI:
 								img_array[y][x][0] = pal_data
 								img_array[y][x][1] = clr_data
 
-						self.IMD[i]["img"] = img_array
+						self.IMD[i]["tiles"][z] = img_array
 
-					input_file.seek(0)
+				elif tmode == "normal":
+					img_array = np.zeros((height, width, 2), dtype=np.int32)
 
-		else:
-			"""a
-			with open(filename, mode='rb') as input_file:
-				for i, file in enumerate(self.LYT):
+					for y in range(height):
+						for x in range(width):
 
-					if not self.LYT[i]["enable"]:
-						continue
+							if cmode >= 8:
+								clr_raw = image_bytes.read(2)
+							else:
+								clr_raw = image_bytes.read(1)
 
-					pos = self.LYT[i]["IMD_pos"]
-					cmode = self.LYT[i]["color_mode"]
-					tmode = self.LYT[i]["tile_mode"]
-					width = self.LYT[i]["width"]
-					height = self.LYT[i]["height"]
+							pal_n = self.colormode_dict[cmode][0]
+							pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
+							clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
+							img_array[y][x][0] = pal_data
+							img_array[y][x][1] = clr_data
 
-					input_file.seek(pos)
+					self.IMD[i]["img"] = img_array
 
-					if tmode == "tiles":
-						for z in range(256 * 256):
-							img_array = np.zeros((height, width, 2), dtype=np.int32)
-
-							for y in range(height):
-								for x in range(width):
-
-									if cmode >= 8:
-										clr_raw = input_file.read(2)
-									else:
-										clr_raw = input_file.read(1)
-
-									pal_n = self.colormode_dict[cmode][0]
-									pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
-									clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
-									img_array[y][x][0] = pal_data
-									img_array[y][x][1] = clr_data
-
-							self.IMD[i]["tiles"][z] = img_array
-
-					elif tmode == "normal":
-						img_array = np.zeros((height, width, 2), dtype=np.int32)
-
-						for y in range(height):
-							for x in range(width):
-
-								if cmode >= 8:
-									clr_raw = input_file.read(2)
-								else:
-									clr_raw = input_file.read(1)
-
-								pal_n = self.colormode_dict[cmode][0]
-								pal_data = byte_sum(b(bitstring.BitArray(clr_raw[:pal_n]).bin))
-								clr_data = byte_sum(b(bitstring.BitArray(clr_raw[pal_n:]).bin))
-								img_array[y][x][0] = pal_data
-								img_array[y][x][1] = clr_data
-
-						self.IMD[i]["img"] = img_array
-
-					input_file.seek(0)
-			# """
-			raise UnfinishedCodeError("compressed files not supported")
+				input_file.seek(0)
 
 	def write(self, filename):
 		pass
